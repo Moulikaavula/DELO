@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aavula's Finance Tracker</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: #f3f4f6; margin: 0; padding: 20px; color: #111827; }
+        .container { max-width: 600px; margin: 0 auto; }
+        h1 { text-align: center; color: #1f2937; text-transform: uppercase; letter-spacing: 1px; }
+        .card { background: white; border-radius: 12px; padding: 20px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+        .summary { text-align: center; font-size: 24px; font-weight: bold; color: #059669; }
+        .negative { color: #dc2626; }
+        .row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid #f3f4f6; }
+        .row:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+        input[type="text"] { border: none; font-size: 16px; outline: none; width: 60%; background: transparent; }
+        input[type="number"] { border: none; font-size: 16px; outline: none; width: 30%; text-align: right; font-weight: bold; background: transparent; }
+        input:focus { border-bottom: 2px solid #3b82f6; }
+        .add-btn { background: #3b82f6; color: white; border: none; padding: 8px 12px; border-radius: 6px; cursor: pointer; width: 100%; font-size: 16px; margin-top: 10px; }
+        .add-btn:hover { background: #2563eb; }
+        .delete-btn { background: #ef4444; color: white; border: none; border-radius: 4px; padding: 4px 8px; cursor: pointer; font-size: 12px; margin-left: 10px; }
+        .status { text-align: center; font-size: 12px; color: #6b7280; height: 16px; margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Aavula's Finance Tracker</h1>
+    <div class="status" id="save-status">All changes saved locally ✓</div>
+
+    <div class="card">
+        <h3>Monthly Remaining Balance</h3>
+        <div class="summary" id="total-balance">$0.00</div>
+    </div>
+
+    <div class="card">
+        <h3>Income (Salary)</h3>
+        <div id="income-list"></div>
+        <button class="add-btn" onclick="addItem('income')">+ Add Income Source</button>
+    </div>
+
+    <div class="card">
+        <h3>Monthly Expenses</h3>
+        <div id="expense-list"></div>
+        <button class="add-btn" onclick="addItem('expense')">+ Add Expense</button>
+    </div>
+
+    <div class="card">
+        <h3>Total Debt / Loans</h3>
+        <div id="debt-list"></div>
+        <button class="add-btn" onclick="addItem('debt')">+ Add Debt</button>
+    </div>
+</div>
+
+<script>
+    // Default data structure
+    let data = JSON.parse(localStorage.getItem('financeData')) || {
+        income: [{ id: 1, name: "Main Salary", amount: 4000 }],
+        expense: [
+            { id: 2, name: "Rent", amount: 1200 },
+            { id: 3, name: "Groceries", amount: 400 },
+            { id: 4, name: "Camera Gear / Tech", amount: 150 },
+            { id: 5, name: "Soccer Gear", amount: 50 }
+        ],
+        debt: [
+            { id: 6, name: "Credit Card", amount: 1500 },
+            { id: 7, name: "Student Loan", amount: 10000 }
+        ]
+    };
+
+    function saveData() {
+        localStorage.setItem('financeData', JSON.stringify(data));
+        const status = document.getElementById('save-status');
+        status.innerText = "Saving...";
+        status.style.color = "#3b82f6";
+        setTimeout(() => {
+            status.innerText = "All changes saved locally ✓";
+            status.style.color = "#10b981";
+        }, 500);
+        updateUI();
+    }
+
+    function updateItem(category, id, field, value) {
+        const item = data[category].find(i => i.id === id);
+        if (item) {
+            item[field] = field === 'amount' ? parseFloat(value) || 0 : value;
+            saveData();
+        }
+    }
+
+    function deleteItem(category, id) {
+        data[category] = data[category].filter(i => i.id !== id);
+        saveData();
+    }
+
+    function addItem(category) {
+        const newItem = { id: Date.now(), name: "New Item", amount: 0 };
+        data[category].push(newItem);
+        saveData();
+    }
+
+    function renderList(category, listId) {
+        const list = document.getElementById(listId);
+        list.innerHTML = '';
+        data[category].forEach(item => {
+            const row = document.createElement('div');
+            row.className = 'row';
+            row.innerHTML = `
+                <input type="text" value="${item.name}" onblur="updateItem('${category}', ${item.id}, 'name', this.value)">
+                <div style="display: flex; align-items: center; width: 40%; justify-content: flex-end;">
+                    <span>$</span>
+                    <input type="number" value="${item.amount}" onblur="updateItem('${category}', ${item.id}, 'amount', this.value)">
+                    <button class="delete-btn" onclick="deleteItem('${category}', ${item.id})">X</button>
+                </div>
+            `;
+            list.appendChild(row);
+        });
+    }
+
+    function updateUI() {
+        renderList('income', 'income-list');
+        renderList('expense', 'expense-list');
+        renderList('debt', 'debt-list');
+
+        const totalIncome = data.income.reduce((sum, item) => sum + item.amount, 0);
+        const totalExpense = data.expense.reduce((sum, item) => sum + item.amount, 0);
+        const balance = totalIncome - totalExpense;
+
+        const balanceEl = document.getElementById('total-balance');
+        balanceEl.innerText = `$${balance.toFixed(2)}`;
+        balanceEl.className = balance >= 0 ? 'summary' : 'summary negative';
+    }
+
+    // Initial render
+    updateUI();
+</script>
+
+</body>
+</html>
