@@ -1617,6 +1617,10 @@
         (Income - Frequent Expenses - Debt - One-Time Expenses +/- Other)
     </div>
 
+    <div id="chart-wrapper" style="display:none; justify-content:center; position:relative; height:200px; margin-bottom:30px;">
+        <canvas id="budgetChart"></canvas>
+    </div>
+
     <div class="category-header">Income</div>
     <div id="income-list"></div>
     <button type="button" class="add-btn" onclick="addItem('income')">+ Add Income</button>
@@ -1694,6 +1698,11 @@
         <div style="display: flex; gap: 10px; margin-top: 12px;">
             <button type="button" onclick="toggleTheme()" style="background: transparent; border: 1px solid rgba(0,0,0,0.2); color: #000; border-radius: 20px; padding: 6px 12px; font-size: 11px; font-weight: 700; cursor: pointer; text-transform: uppercase; transition: all 0.2s;" id="theme-btn">🌙 Dark Mode</button>
             <button type="button" onclick="clearAllData()" style="background: transparent; border: 1px solid rgba(0,0,0,0.2); color: #ff4d4d; border-radius: 20px; padding: 6px 12px; font-size: 11px; font-weight: 700; cursor: pointer; text-transform: uppercase; transition: all 0.2s;">🗑️ Reset Data</button>
+        </div>
+        <div class="data-transfer">
+            <button type="button" class="data-transfer-btn" onclick="downloadAllData()">⬇ Download Backup</button>
+            <button type="button" class="data-transfer-btn" onclick="document.getElementById('data-file-input').click()">⬆ Upload Backup</button>
+            <input type="file" id="data-file-input" accept="application/json,.json" onchange="importAllData(event)">
         </div>
         <div style="margin-top: 18px; font-size: 10px; opacity: 0.4; letter-spacing: 0.3px;">Built by AI Prompted By Moulik</div>
     </div>
@@ -2800,7 +2809,11 @@
 
     function addItem(category) {
         if (!Array.isArray(data[category])) data[category] = [];
-        const newItem = { id: Date.now(), name: "", amount: 0 };
+        let newId;
+        do {
+            newId = Date.now() * 1000 + Math.floor(Math.random() * 1000);
+        } while (data[category].some(i => i.id === newId));
+        const newItem = { id: newId, name: "", amount: 0 };
         if (category === 'income') { newItem.tax = 0; }
         if (category === 'debt') {
             newItem.hasMonthly = true;
@@ -2849,6 +2862,7 @@
         const isDark = body.classList.contains('dark-theme');
         storeSet('delo-theme', isDark ? 'dark' : 'light');
         schedulePush();
+        updateDashboard();
         document.getElementById('theme-btn').innerText = isDark ? '☀️ Light Mode' : '🌙 Dark Mode';
         
         const colorScheme = document.querySelector('meta[name="color-scheme"]');
@@ -2889,9 +2903,22 @@
 
     document.addEventListener('DOMContentLoaded', applySavedTheme);
 
-    function clearAllData() {
+    async function clearAllData() {
         if(confirm("Are you sure you want to permanently delete all your financial data? This cannot be undone.")) {
             storeRemove('deloFinanceData_v4'); storeRemove('deloFinanceData_v3');
+            storeRemove('deloManualData_v1');
+            if (currentUser) {
+                if (unsubscribeSnapshot) { unsubscribeSnapshot(); unsubscribeSnapshot = null; }
+                try {
+                    await setDoc(userDocRef(currentUser.uid), {
+                        financeData: { months: {} },
+                        manualData: { entries: [] },
+                        theme: storeGet('delo-theme') || 'light',
+                        syncVersion: 2,
+                        updatedAt: Date.now()
+                    });
+                } catch (e) { /* offline: local data is still cleared */ }
+            }
             location.reload();
         }
     }
