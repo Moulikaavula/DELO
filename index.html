@@ -1713,14 +1713,23 @@
 
 <script type="module">
     // ---- Firebase cloud sync ----
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
-    import {
-        getAuth, onAuthStateChanged, createUserWithEmailAndPassword,
-        signInWithEmailAndPassword, signOut, setPersistence, browserLocalPersistence
-    } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
-    import {
-        getFirestore, doc, setDoc, getDoc, onSnapshot
-    } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
+    // Firebase is loaded with dynamic imports so that if the CDN is blocked or offline,
+    // the rest of the app (including "Skip login") still works instead of crashing.
+    let initializeApp, getAuth, onAuthStateChanged, createUserWithEmailAndPassword,
+        signInWithEmailAndPassword, signOut, setPersistence, browserLocalPersistence,
+        getFirestore, doc, setDoc, getDoc, onSnapshot;
+    let firebaseReady = false;
+    try {
+        ({ initializeApp } = await import("https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js"));
+        ({ getAuth, onAuthStateChanged, createUserWithEmailAndPassword,
+           signInWithEmailAndPassword, signOut, setPersistence, browserLocalPersistence
+        } = await import("https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js"));
+        ({ getFirestore, doc, setDoc, getDoc, onSnapshot
+        } = await import("https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js"));
+        firebaseReady = true;
+    } catch (e) {
+        console.warn('Firebase failed to load; cloud sync is unavailable.', e);
+    }
 
     const firebaseConfig = {
         apiKey: "AIzaSyD-qJCbDAJoUbLn2g7CNGE73oGZXWrbYH4",
@@ -1731,16 +1740,25 @@
         appId: "1:531283445864:web:d89794e8b0a91a82f213dd"
     };
 
-    const fbApp = initializeApp(firebaseConfig);
-    const fbAuth = getAuth(fbApp);
-    const fbDb = getFirestore(fbApp);
-    // Keep the person signed in across reloads and browser restarts on this device.
-    setPersistence(fbAuth, browserLocalPersistence).catch(() => {});
+    let fbApp, fbAuth, fbDb;
+    if (firebaseReady) {
+        try {
+            fbApp = initializeApp(firebaseConfig);
+            fbAuth = getAuth(fbApp);
+            fbDb = getFirestore(fbApp);
+            // Keep the person signed in across reloads and browser restarts on this device.
+            setPersistence(fbAuth, browserLocalPersistence).catch(() => {});
+        } catch (e) {
+            firebaseReady = false;
+            console.warn('Firebase init failed; cloud sync is unavailable.', e);
+        }
+    }
 
     let currentUser = null;
     let suppressNextRemoteEcho = false;
     let unsubscribeSnapshot = null;
     let syncPushTimer = null;
+    let lastPushedAt = 0;
     let localOnlyMode = storeGet('delo-local-only-mode') === 'true';
 
     function openLocalModeWarning() {
@@ -1819,6 +1837,10 @@
             errEl.innerText = 'Please enter both an email and a password.';
             return;
         }
+        if (!firebaseReady) {
+            errEl.innerText = 'Cloud sign-in is unavailable right now (check your connection). You can use "Skip login" instead.';
+            return;
+        }
         signinBtn.disabled = true;
         signupBtn.disabled = true;
         try {
@@ -1845,12 +1867,14 @@
         if (code.includes('invalid-credential') || code.includes('wrong-password') || code.includes('user-not-found')) return 'Incorrect email or password.';
         if (code.includes('weak-password')) return 'Password should be at least 6 characters.';
         if (code.includes('invalid-email')) return 'That email address looks invalid.';
+        if (code.includes('network-request-failed')) return 'Network error — check your connection and try again.';
+        if (code.includes('too-many-requests')) return 'Too many attempts. Please wait a moment and try again.';
         return 'Something went wrong. Please try again.';
     }
 
     async function signOutOfSync() {
         if (unsubscribeSnapshot) { unsubscribeSnapshot(); unsubscribeSnapshot = null; }
-        await signOut(fbAuth);
+        if (firebaseReady) await signOut(fbAuth);
     }
     window.signOutOfSync = signOutOfSync;
 
@@ -1867,7 +1891,10 @@
 
     async function pushToCloud() {
         if (!currentUser) return;
+        if (syncPushTimer) { clearTimeout(syncPushTimer); syncPushTimer = null; }
         try {
+            const pushedAt = Date.now();
+            lastPushedAt = pushedAt;
             await setDoc(userDocRef(currentUser.uid), {
                 // Keep every part of the tracker in the same per-user cloud document.
                 // financeData contains income, debt, frequent expenses, one-time expenses,
@@ -1877,7 +1904,7 @@
                 manualData: JSON.parse(JSON.stringify(manualStorage)),
                 theme: storeGet('delo-theme') || 'light',
                 syncVersion: 2,
-                updatedAt: Date.now()
+                updatedAt: pushedAt
             });
             setSyncStatus('Synced just now ✓');
         } catch (e) {
@@ -1898,6 +1925,7 @@
 
     function applyRemoteData(remote) {
         suppressNextRemoteEcho = true;
+        try {
         if (remote && remote.financeData && hasFinanceEntries(remote.financeData)) {
             const selectedMonth = storage.currentMonth;
             storage = remote.financeData;
@@ -1928,7 +1956,9 @@
         updateUI();
         renderManualView();
         setSyncStatus('Synced just now ✓');
-        setTimeout(() => { suppressNextRemoteEcho = false; }, 300);
+        } finally {
+            setTimeout(() => { suppressNextRemoteEcho = false; }, 300);
+        }
     }
 
     async function startCloudSync(user) {
@@ -1964,19 +1994,27 @@
             setSyncStatus('⚠️ Cloud sync unavailable');
         }
 
+        // The person may have signed out (or switched accounts) while we were connecting.
+        if (currentUser !== user) return;
         if (unsubscribeSnapshot) unsubscribeSnapshot();
         unsubscribeSnapshot = onSnapshot(userDocRef(user.uid), (docSnap) => {
             if (!docSnap.exists()) return;
             const remote = docSnap.data();
+            // Ignore the echo of our own write; applying it could overwrite newer local edits.
+            if (docSnap.metadata.hasPendingWrites || remote.updatedAt === lastPushedAt) return;
             // Ignore empty cloud snapshots when this device already has real data.
             if (!hasFinanceEntries(remote.financeData) && !hasManualEntries(remote.manualData)
                 && (hasFinanceEntries(storage) || hasManualEntries(manualStorage))) return;
             applyRemoteData(remote);
+        }, () => {
+            setSyncStatus('⚠️ Cloud sync unavailable');
         });
     }
 
     function stopCloudSync() {
         currentUser = null;
+        if (syncPushTimer) { clearTimeout(syncPushTimer); syncPushTimer = null; }
+        if (unsubscribeSnapshot) { unsubscribeSnapshot(); unsubscribeSnapshot = null; }
         document.getElementById('sync-signed-in').style.display = 'none';
         const localStatus = document.getElementById('local-mode-status');
         if (localStatus) localStatus.style.display = localOnlyMode ? 'flex' : 'none';
@@ -1989,18 +2027,23 @@
         }
     }
 
-    onAuthStateChanged(fbAuth, (user) => {
-        if (localOnlyMode) {
-            if (user) signOut(fbAuth).catch(() => {});
-            stopCloudSync();
-            return;
-        }
-        if (user) {
-            startCloudSync(user);
-        } else {
-            stopCloudSync();
-        }
-    });
+    if (firebaseReady) {
+        onAuthStateChanged(fbAuth, (user) => {
+            if (localOnlyMode) {
+                if (user) signOut(fbAuth).catch(() => {});
+                stopCloudSync();
+                return;
+            }
+            if (user) {
+                startCloudSync(user);
+            } else {
+                stopCloudSync();
+            }
+        });
+    } else {
+        // Firebase unavailable: show the welcome screen (or local mode) without cloud sync.
+        stopCloudSync();
+    }
 
     const currencySymbols = {"USD": "$", "CAD": "C$", "EUR": "€", "GBP": "£", "INR": "₹", "AUD": "A$", "JPY": "¥", "CNY": "¥", "CHF": "CHF", "SGD": "S$", "NZD": "NZ$", "MXN": "$", "BRL": "R$", "RUB": "₽", "ZAR": "R", "SEK": "kr", "NOK": "kr", "AED": "د.إ", "AFN": "؋", "ALL": "L", "AMD": "֏", "ANG": "ƒ", "AOA": "Kz", "ARS": "$", "AWG": "ƒ", "AZN": "₼", "BAM": "KM", "BBD": "$", "BDT": "৳", "BGN": "лв", "BHD": ".د.ب", "BIF": "FBu", "BMD": "$", "BND": "$", "BOB": "$b", "BSD": "$", "BTN": "Nu.", "BWP": "P", "BYN": "Br", "BZD": "BZ$", "CDF": "FC", "CLP": "$", "COP": "$", "CRC": "₡", "CUP": "₱", "CVE": "$", "CZK": "Kč", "DJF": "Fdj", "DKK": "kr", "DOP": "RD$", "DZD": "دج", "EGP": "£", "ERN": "Nfk", "ETB": "Br", "FJD": "$", "FKP": "£", "GEL": "₾", "GHS": "GH₵", "GIP": "£", "GMD": "D", "GNF": "FG", "GTQ": "Q", "GYD": "$", "HKD": "$", "HNL": "L", "HRK": "kn", "HTG": "G", "HUF": "Ft", "IDR": "Rp", "ILS": "₪", "IQD": "ع.د", "IRR": "﷼", "ISK": "kr", "JMD": "J$", "JOD": "د.ا", "KES": "KSh", "KGS": "лв", "KHR": "៛", "KMF": "CF", "KPW": "₩", "KRW": "₩", "KWD": "د.ك", "KYD": "$", "KZT": "₸", "LAK": "₭", "LBP": "£", "LKR": "₨", "LRD": "$", "LSL": "L", "LYD": "ل.د", "MAD": "د.م.", "MDL": "L", "MGA": "Ar", "MKD": "ден", "MMK": "K", "MNT": "₮", "MOP": "MOP$", "MRU": "UM", "MUR": "₨", "MVR": "Rf", "MWK": "MK", "MYR": "RM", "MZN": "MT", "NAD": "$", "NGN": "₦", "NIO": "C$", "NPR": "₨", "OMR": "﷼", "PAB": "B/.", "PEN": "S/.", "PGK": "K", "PHP": "₱", "PKR": "₨", "PLN": "zł", "PYG": "Gs", "QAR": "﷼", "RON": "lei", "RSD": "Дин.", "RWF": "R₣", "SAR": "﷼", "SBD": "$", "SCR": "₨", "SDG": "ج.س.", "SHP": "£", "SLL": "Le", "SOS": "S", "SRD": "$", "SSP": "£", "STN": "Db", "SYP": "£", "SZL": "E", "THB": "฿", "TJS": "SM", "TMT": "T", "TND": "د.ت", "TOP": "T$", "TRY": "₺", "TTD": "TT$", "TWD": "NT$", "TZS": "TSh", "UAH": "₴", "UGX": "USh", "UYU": "$U", "UZS": "лв", "VEF": "Bs", "VND": "₫", "VUV": "VT", "WST": "WS$", "XAF": "FCFA", "XCD": "$", "XOF": "CFA", "XPF": "₣", "YER": "﷼", "ZMW": "ZK", "ZWL": "Z$"};
     const currencyNames = {"USD": "United States Dollar America US", "CAD": "Canadian Dollar Canada", "EUR": "Euro Europe European Union", "GBP": "British Pound Sterling United Kingdom England UK", "INR": "Indian Rupee India", "AUD": "Australian Dollar Australia", "JPY": "Japanese Yen Japan", "CNY": "Chinese Yuan Renminbi China", "CHF": "Swiss Franc Switzerland", "SGD": "Singapore Dollar Singapore", "NZD": "New Zealand Dollar", "MXN": "Mexican Peso Mexico", "BRL": "Brazilian Real Brazil", "RUB": "Russian Ruble Russia", "ZAR": "South African Rand South Africa", "SEK": "Swedish Krona Sweden", "NOK": "Norwegian Krone Norway", "AED": "United Arab Emirates Dirham UAE", "AFN": "Afghan Afghani Afghanistan", "ALL": "Albanian Lek Albania", "AMD": "Armenian Dram Armenia", "ANG": "Netherlands Antillean Guilder", "AOA": "Angolan Kwanza Angola", "ARS": "Argentine Peso Argentina", "AWG": "Aruban Florin Aruba", "AZN": "Azerbaijani Manat Azerbaijan", "BAM": "Bosnia-Herzegovina Convertible Mark", "BBD": "Barbadian Dollar Barbados", "BDT": "Bangladeshi Taka Bangladesh", "BGN": "Bulgarian Lev Bulgaria", "BHD": "Bahraini Dinar Bahrain", "BIF": "Burundian Franc Burundi", "BMD": "Bermudan Dollar Bermuda", "BND": "Brunei Dollar Brunei", "BOB": "Bolivian Boliviano Bolivia", "BSD": "Bahamian Dollar Bahamas", "BTN": "Bhutanese Ngultrum Bhutan", "BWP": "Botswanan Pula Botswana", "BYN": "Belarusian Ruble Belarus", "BZD": "Belize Dollar Belize", "CDF": "Congolese Franc Congo", "CLP": "Chilean Peso Chile", "COP": "Colombian Peso Colombia", "CRC": "Costa Rican Colón Costa Rica", "CUP": "Cuban Peso Cuba", "CVE": "Cape Verdean Escudo Cape Verde", "CZK": "Czech Republic Koruna Czechia", "DJF": "Djiboutian Franc Djibouti", "DKK": "Danish Krone Denmark", "DOP": "Dominican Peso Dominican Republic", "DZD": "Algerian Dinar Algeria", "EGP": "Egyptian Pound Egypt", "ERN": "Eritrean Nakfa Eritrea", "ETB": "Ethiopian Birr Ethiopia", "FJD": "Fijian Dollar Fiji", "FKP": "Falkland Islands Pound", "GEL": "Georgian Lari Georgia", "GHS": "Ghanaian Cedi Ghana", "GIP": "Gibraltar Pound", "GMD": "Gambian Dalasi Gambia", "GNF": "Guinean Franc Guinea", "GTQ": "Guatemalan Quetzal Guatemala", "GYD": "Guyanaese Dollar Guyana", "HKD": "Hong Kong Dollar", "HNL": "Honduran Lempira Honduras", "HRK": "Croatian Kuna Croatia", "HTG": "Haitian Gourde Haiti", "HUF": "Hungarian Forint Hungary", "IDR": "Indonesian Rupiah Indonesia", "ILS": "Israeli New Sheqel Israel", "IQD": "Iraqi Dinar Iraq", "IRR": "Iranian Rial Iran", "ISK": "Icelandic Króna Iceland", "JMD": "Jamaican Dollar Jamaica", "JOD": "Jordanian Dinar Jordan", "KES": "Kenyan Shilling Kenya", "KGS": "Kyrgystani Som Kyrgyzstan", "KHR": "Cambodian Riel Cambodia", "KMF": "Comorian Franc Comoros", "KPW": "North Korean Won North Korea", "KRW": "South Korean Won South Korea", "KWD": "Kuwaiti Dinar Kuwait", "KYD": "Cayman Islands Dollar", "KZT": "Kazakhstani Tenge Kazakhstan", "LAK": "Laotian Kip Laos", "LBP": "Lebanese Pound Lebanon", "LKR": "Sri Lankan Rupee Sri Lanka", "LRD": "Liberian Dollar Liberia", "LSL": "Lesotho Loti Lesotho", "LYD": "Libyan Dinar Libya", "MAD": "Moroccan Dirham Morocco", "MDL": "Moldovan Leu Moldova", "MGA": "Malagasy Ariary Madagascar", "MKD": "Macedonian Denar North Macedonia", "MMK": "Myanmar Kyat Burma", "MNT": "Mongolian Tugrik Mongolia", "MOP": "Macanese Pataca Macau", "MRU": "Mauritanian Ouguiya Mauritania", "MUR": "Mauritian Rupee Mauritius", "MVR": "Maldivian Rufiyaa Maldives", "MWK": "Malawian Kwacha Malawi", "MYR": "Malaysian Ringgit Malaysia", "MZN": "Mozambican Metical Mozambique", "NAD": "Namibian Dollar Namibia", "NGN": "Nigerian Naira Nigeria", "NIO": "Nicaraguan Córdoba Nicaragua", "NPR": "Nepalese Rupee Nepal", "OMR": "Omani Rial Oman", "PAB": "Panamanian Balboa Panama", "PEN": "Peruvian Nuevo Sol Peru", "PGK": "Papua New Guinean Kina Papua New Guinea", "PHP": "Philippine Peso Philippines", "PKR": "Pakistani Rupee Pakistan", "PLN": "Polish Zloty Poland", "PYG": "Paraguayan Guarani Paraguay", "QAR": "Qatari Rial Qatar", "RON": "Romanian Leu Romania", "RSD": "Serbian Dinar Serbia", "RWF": "Rwandan Franc Rwanda", "SAR": "Saudi Riyal Saudi Arabia", "SBD": "Solomon Islands Dollar", "SCR": "Seychellois Rupee Seychelles", "SDG": "Sudanese Pound Sudan", "SHP": "Saint Helena Pound", "SLL": "Sierra Leonean Leone", "SOS": "Somali Shilling Somalia", "SRD": "Surinamese Dollar Suriname", "SSP": "South Sudanese Pound", "STN": "São Tomé and Príncipe Dobra", "SYP": "Syrian Pound Syria", "SZL": "Swazi Lilangeni Eswatini Swaziland", "THB": "Thai Baht Thailand", "TJS": "Tajikistani Somoni Tajikistan", "TMT": "Turkmenistani Manat Turkmenistan", "TND": "Tunisian Dinar Tunisia", "TOP": "Tongan Paʻanga Tonga", "TRY": "Turkish Lira Turkey", "TTD": "Trinidad and Tobago Dollar", "TWD": "New Taiwan Dollar Taiwan", "TZS": "Tanzanian Shilling Tanzania", "UAH": "Ukrainian Hryvnia Ukraine", "UGX": "Ugandan Shilling Uganda", "UYU": "Uruguayan Peso Uruguay", "UZS": "Uzbekistan Som", "VEF": "Venezuelan Bolívar Venezuela", "VND": "Vietnamese Dong Vietnam", "VUV": "Vanuatu Vatu", "WST": "Samoan Tala Samoa", "XAF": "FCFA (FCFA)", "XCD": "XCD ($)", "XOF": "CFA (CFA)", "XPF": "CFP Franc", "YER": "Yemeni Rial Yemen", "ZMW": "ZK (ZK)", "ZWL": "Z$ (Z$)"};
@@ -2908,6 +2951,7 @@
             storeRemove('deloFinanceData_v4'); storeRemove('deloFinanceData_v3');
             storeRemove('deloManualData_v1');
             if (currentUser) {
+                if (syncPushTimer) { clearTimeout(syncPushTimer); syncPushTimer = null; }
                 if (unsubscribeSnapshot) { unsubscribeSnapshot(); unsubscribeSnapshot = null; }
                 try {
                     await setDoc(userDocRef(currentUser.uid), {
