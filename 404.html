@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Page not found · DELO Finance Tracker</title>
+<style>
+    :root { --g:#22c55e; --r:#f43f5e; --t:#fff; --m:#9ca3af; }
+    * { box-sizing:border-box; }
+    html,body { height:100%; margin:0; }
+    body {
+        display:flex; align-items:center; justify-content:center; padding:24px; overflow:hidden;
+        background:#05060a; color:var(--t); perspective:1200px;
+        font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    }
+    #bg { position:fixed; inset:0; width:100%; height:100%; }
+    body::before { /* scanlines + vignette */
+        content:""; position:fixed; inset:0; z-index:3; pointer-events:none;
+        background:repeating-linear-gradient(0deg, rgba(255,255,255,.025) 0 1px, transparent 1px 3px),
+                   radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,.75));
+    }
+    .card {
+        position:relative; z-index:2; width:100%; max-width:540px; text-align:center;
+        padding:40px 30px 34px; border-radius:30px;
+        background:linear-gradient(160deg, rgba(10,11,16,.92), rgba(5,6,9,.96));
+        border:1px solid rgba(255,255,255,.08);
+        backdrop-filter:blur(24px); -webkit-backdrop-filter:blur(24px);
+        box-shadow:0 0 0 1px rgba(0,0,0,.6), 0 30px 90px rgba(0,0,0,.7), 0 0 80px rgba(244,63,94,.12);
+        transform:rotateX(var(--rx,0deg)) rotateY(var(--ry,0deg));
+        transition:transform .15s ease-out;
+        animation:rise .9s cubic-bezier(.2,.8,.2,1) both;
+    }
+    @keyframes rise { from { opacity:0; transform:translateY(40px) scale(.94) rotateX(12deg); } }
+
+    .chip {
+        display:inline-flex; align-items:center; gap:8px; padding:6px 14px; border-radius:99px;
+        font:700 11px/1 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:2px;
+        color:var(--r); background:rgba(244,63,94,.1); border:1px solid rgba(244,63,94,.4);
+    }
+    .chip i { width:8px; height:8px; border-radius:50%; background:var(--r); box-shadow:0 0 10px var(--r); animation:blink 1s infinite; }
+    @keyframes blink { 50% { opacity:.2; } }
+
+    .code {
+        position:relative; margin:14px 0 4px; font:900 clamp(84px,25vw,140px)/1 Georgia,'Times New Roman',serif; letter-spacing:6px;
+        background:linear-gradient(180deg,#fff 20%,var(--r)); -webkit-background-clip:text; background-clip:text; color:transparent;
+        filter:drop-shadow(0 0 24px rgba(244,63,94,.55));
+    }
+
+    h1 { margin:6px 0 10px; font:700 clamp(24px,6.5vw,34px)/1.15 Georgia,'Times New Roman',serif; text-shadow:0 0 30px rgba(255,255,255,.25); }
+    h1 span { color:var(--r); }
+    p { min-height:48px; margin:0 0 26px; color:var(--m); line-height:1.6; font-size:15px; }
+    p::after { content:"▍"; color:var(--g); animation:blink 1s infinite; }
+
+    .actions { display:flex; gap:12px; justify-content:center; flex-wrap:wrap; }
+    a.btn { position:relative; padding:14px 28px; border-radius:14px; text-decoration:none; font-weight:800; font-size:15px; transition:transform .15s, box-shadow .2s; }
+    a.primary { color:#05060a; background:linear-gradient(135deg,#4ade80,var(--g)); box-shadow:0 0 28px rgba(34,197,94,.45); }
+    a.ghost { color:var(--t); border:1px solid rgba(255,255,255,.35); background:rgba(255,255,255,.04); }
+    a.btn:hover { transform:translateY(-3px) scale(1.03); }
+    a.primary:hover { box-shadow:0 0 44px rgba(34,197,94,.8); }
+
+    @media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation:none !important; transition:none !important; } }
+</style>
+</head>
+<body>
+    <canvas id="bg"></canvas>
+
+    <div class="card" id="card">
+        <div class="chip"><i></i>PAGE NOT FOUND</div>
+        <div class="code" data-t="404">404</div>
+        <h1>This page went <span>bankrupt.</span></h1>
+        <p id="msg" data-text="We searched every account, ledger and spreadsheet. This page isn't coming back — but your data is 100% safe."></p>
+        <div class="actions">
+            <a class="btn primary" id="home-link" href="/">Back to DELO</a>
+            <a class="btn ghost" href="javascript:history.back()">Go back</a>
+        </div>
+    </div>
+
+<script>
+    // "Back to DELO" finds your app automatically.
+    //  - Custom domain, or a username.github.io user site: goes to '/'.
+    //  - GitHub project site (username.github.io/repo-name/): goes to '/repo-name/'.
+    // HOME is your site's address. Leave it as '' to auto-detect instead.
+    var HOME = 'https://moulikaavula.github.io/DELO/';
+    (function () {
+        var link = document.getElementById('home-link');
+        if (HOME) { link.setAttribute('href', HOME); return; }
+        var seg = location.pathname.split('/')[1];
+        if (/\.github\.io$/.test(location.hostname) && seg) {
+            fetch('/' + seg + '/index.html', { method: 'HEAD' })
+                .then(function (r) { if (r.ok) link.setAttribute('href', '/' + seg + '/'); })
+                .catch(function () {});
+        }
+    })();
+
+    var reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    var card = document.getElementById('card');
+
+    // Typewriter
+    var msg = document.getElementById('msg'), txt = msg.dataset.text, n = 0;
+    if (reduce) msg.textContent = txt;
+    else (function type() { msg.textContent = txt.slice(0, ++n); if (n < txt.length) setTimeout(type, 28); })();
+
+    // 3D tilt
+    addEventListener('mousemove', function (e) {
+        if (reduce) return;
+        card.style.setProperty('--ry', ((e.clientX / innerWidth - .5) * 12) + 'deg');
+        card.style.setProperty('--rx', (-(e.clientY / innerHeight - .5) * 12) + 'deg');
+    });
+
+    // ---- Currency rain (depth layers, glow trails) ----
+    var cv = document.getElementById('bg'), ctx = cv.getContext('2d'), W, H, P = [];
+        var SYMS = ['$','€','£','¥','₹','₿','₩','₽','₪','₱','฿','¢','₺','₫'];
+
+    function mk(init) {
+        var z = .12 + Math.random() * .88;
+        return { x: Math.random() * W, y: init ? Math.random() * H : -60, z: z, vx: 0, vy: 0, ph: Math.random() * 6.28,
+                 s: SYMS[Math.random() * SYMS.length | 0], cy: Math.random() < .2,
+                 size: 16 + z * z * 40, sp: .5 + z * 2.2, a: .45 + z * .45 };
+    }
+    function size() {
+        var d = Math.min(devicePixelRatio || 1, 2); W = innerWidth; H = innerHeight;
+        cv.width = W * d; cv.height = H * d; ctx.setTransform(d, 0, 0, d, 0, 0);
+        ctx.fillStyle = '#05060a'; ctx.fillRect(0, 0, W, H);
+        P = []; for (var i = 0, n = Math.min(150, Math.round(W * H / 9000)); i < n; i++) P.push(mk(true));
+    }
+    addEventListener('resize', size); size();
+    function draw(t) {
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.fillStyle = 'rgba(5,6,10,.5)'; ctx.fillRect(0, 0, W, H);          // fading = glow trails
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        P.forEach(function (p, i) {
+            p.y += p.sp; p.x += Math.sin(t * .001 + p.ph) * .35 * p.z;
+            if (p.y > H + 80) { P[i] = mk(false); return; }
+            var col = p.cy ? '56,189,248' : '34,197,94';
+            ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(Math.sin(t * .0007 + p.ph) * .5);
+            ctx.font = '800 ' + Math.round(p.size) + 'px sans-serif';
+            ctx.fillStyle = 'rgba(' + col + ',' + p.a + ')';
+            var glow = p.z > .8 ? 3 : 0;                                       // barely any glow, only on the closest symbols
+            if (glow) { ctx.shadowColor = 'rgb(' + col + ')'; ctx.shadowBlur = glow; } else ctx.shadowBlur = 0;
+            ctx.fillText(p.s, 0, 0); ctx.restore();
+        });
+        ctx.shadowBlur = 0;
+    }
+    function loop(t) {
+        draw(t); requestAnimationFrame(loop);
+    }
+    if (reduce) { for (var f = 0; f < 6; f++) draw(f * 900); } else requestAnimationFrame(loop);
+</script>
+</body>
+</html>
